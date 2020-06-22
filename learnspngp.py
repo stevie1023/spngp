@@ -53,8 +53,7 @@ class Mixture:
         self.depth     = dict.get(kwargs, 'depth', 0)
         self.n         = kwargs['n']
         self.parent    = dict.get(kwargs, 'parent', None)
-        self.splits    = dict.get(kwargs, 'splits', []) # for bins algo
-
+        self.splits    = dict.get(kwargs, 'splits', [])
         #assert np.all(self.spreads > 0)
 
     def __repr__(self, level = 0):
@@ -121,7 +120,8 @@ def query(X, mins, maxs, skipleft=False):
         if not skipleft:
             mask = mask & (X[:, d_] >= mins[d_]) & (X[:,d_] <= maxs[d_])
         else:
-            mask = mask & (X[:, d_] >= mins[d_]) & (X[:,d_] <= maxs[d_])
+            mask = mask & (X[:, d_] > mins[d_]) & (X[:,d_] <= maxs[d_])
+
     return np.nonzero(mask)[0]
 
 def build(**kwargs):
@@ -307,11 +307,11 @@ def build_bins(**kwargs):
     splits, features_mask = get_splits(X, qd, meta=dict.get(kwargs, 'meta', None), log=log)
     
     root_mixture_opts = {
-        'mins':      np.min(X, 0), 
+        'mins':      np.min(X, 0),  #min & max of every feature
         'maxs':      np.max(X, 0), 
-        'n':         len(X), 
+        'n':         len(X), #here the valid length of the data(for every feature)
         'parent':    None,
-        'dimension': np.argmax(features_mask)
+        'dimension': np.argmax(features_mask)      #the index of the features
     }
 
     nsplits            = Counter()
@@ -323,15 +323,15 @@ def build_bins(**kwargs):
         
         if type(node) is not Mixture:
             continue
-        
-        d = node.dimension
-        fit_lhs = node.mins < splits[:,  0]
+        d = np.argmax(np.var(X, axis=0))
+        # d = node.dimension
+        fit_lhs = node.mins < splits[:,  0]# the node is the Mixture now(include all data for every feature
         fit_rhs = node.maxs > splits[:, -1]
         create  = np.logical_and(fit_lhs, fit_rhs)
         create  = np.logical_and(create, features_mask)
     
         # Preprocess splits
-        node_splits = []
+        node_splits = []#store only splits in one dimension(feature) in every loop, d is changing in different loops
         for node_split in splits[d]:
             # We skip the split completely if it is outside of 
             # the scope of the data in this dimension. parent split 
@@ -339,22 +339,26 @@ def build_bins(**kwargs):
             if node_split <= node.mins[d] or node_split >= node.maxs[d]:
                 continue
 
-            node_splits.append(node_split)
+            node_splits.append(node_split)    #store the valid splits
         
         # Jumping results in high branching of new Mixtures, to 
         # help this problem we reduce the creation of new branches
         # for depth >= 1
         if reduce_branching and node.depth >= 1:
-            node_splits = [np.median(node_splits)]
+            a = node_splits
+            # b = a[2]-a[0]
+            node_splits = [np.median(a)]
+            # node_splits = node_splits.append(np.mean(a))#other choice of splits
 
         if len(node_splits) == 0: raise Exception('1')
         
-        for split in node_splits:
+        for split in node_splits:# again operate in splits in one dimension
             create_left  = create.copy()
             create_right = create.copy()
 
             create_left[d]  = split != node_splits[0] 
-            create_right[d] = split != node_splits[-1]
+            create_right[d] = split != node_splits[-1] #create left(right)nodes for splits other than the first/last split
+            # no left nodes for the first split and no right nodes for the last split
 
             if jump:
                 # We force a new dimension for every child 
@@ -370,8 +374,9 @@ def build_bins(**kwargs):
             new_maxs[d], new_mins[d] = split, split
             
             idx_left   = query(X, node.mins, new_maxs,  skipleft=False)
-            idx_right  = query(X, new_mins,  node.maxs, skipleft=True)
+            idx_right  = query(X, new_mins,  node.maxs, skipleft=True)#return the first index of data that satisfies certain requirements
             
+
             next_depth = node.depth+1
 
             loop = [
@@ -392,18 +397,18 @@ def build_bins(**kwargs):
                 if randomize_branching:
                     next_dimension = np.random.choice(np.where(create_mixture)[0])
                 else:
-                    next_dimension = np.argmax(create_mixture)
+                    next_dimension = np.argmax(create_mixture) # the index of the newly spliting place is the next_dimension
 
                 mixture_opts = {
                         'mins':      mins,
                         'maxs':      maxs,
                         'depth':     next_depth,
                         'dimension': next_dimension,
-                        'n':         len(idx)
-                }
+                        'n':         len(idx)    #the number of left/right new splits
+                }                                   #newly genenrated mixture nodes for the next dimension
 
                 if all([can_create, big_enough, not_too_deep, not_too_big]):    
-                    results.append(Mixture(**mixture_opts))
+                    results.append(Mixture(**mixture_opts))  # results store the new nodes of the first mixture nodes for every feature
                 elif can_create and len(idx) > max_samples:
                     print("Forcing a Mixture...")
                     results.append(Mixture(**mixture_opts))
@@ -414,7 +419,7 @@ def build_bins(**kwargs):
                     results.append(gp)
 
             if len(results) == 2:
-                to_process.extend(results)
+                to_process.extend(results) #results are put into the root_reigon
                 separator_opts = {
                     'depth': node.depth,
                     'dimension':      d, 
@@ -422,7 +427,7 @@ def build_bins(**kwargs):
                     'children': results, 
                     'parent':       None
                 }
-                node.children.append(Separator(**separator_opts))
+                node.children.append(Separator(**separator_opts))  #create product nodes for every mixture node
             elif len(results) == 1:
                 node.children.extend(results)
                 to_process.extend(results)

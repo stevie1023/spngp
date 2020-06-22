@@ -7,8 +7,10 @@ import sys
 
 np.random.seed(58)
 
-data = pd.read_csv('datasets/ccpp/ccpp.csv')
+# data = pd.read_csv('datasets/ccpp/ccpp.csv')
+data = pd.read_csv('data1.csv')
 data = pd.DataFrame(data).dropna() # miss = data.isnull().sum()/len(data)
+print(data)
 dmean, dstd = data.mean(), data.std()
 data = (data-dmean)/dstd
 
@@ -31,6 +33,8 @@ root_region, gps_ = build_bins(**opts)
 #root_region, gps_ = build(X=x, delta_divisor=3, max_depth=2)
 root, gps         = structure(root_region, gp_types=['rbf'])
 
+
+
 for i, gp in enumerate(gps):
     idx = query(x, gp.mins, gp.maxs)
     gp.x, gp.y = x[idx], y[idx]
@@ -40,7 +44,7 @@ for i, gp in enumerate(gps):
 root.update()
 
 for smudge in np.arange(0, 0.5, 0.05):
-    mu_s, cov_s = root.forward(test.iloc[:, 0:4].values, smudge=smudge)
+    mu_s, cov_s ,mll= root.forward(test.iloc[:, 0:4].values, smudge=smudge)
     mu_s = (mu_s.ravel() * dstd.iloc[-1]) + dmean.iloc[-1]
     mu_t = (test.iloc[:, -1]*dstd.iloc[-1]) + dmean.iloc[-1]
     sqe = (mu_s - mu_t.values)**2

@@ -35,6 +35,9 @@ class Sum:
         for i, child in enumerate(self.children):
             mu_c, co_c = child.forward(x_pred, **kwargs)
             mu_x[:, i], co_x[:, i] = mu_c.squeeze(-1), co_c.squeeze(-1)
+        #
+        # index_max = np.argmax((np.mean(mu_x[:, 0] @ _wei), np.mean(mu_x[:, 1] @ _wei)))
+        # return_mu, return_cov = mu_x[:, index_max], co_x @ _wei
 
         return_mu, return_cov = mu_x @ _wei, co_x @ _wei
         return return_mu, return_cov
@@ -338,7 +341,7 @@ def structure(root_region, **kwargs):
                 sto.children.append(_child)
             _cn = len(sto.children)
             sto.weights = np.ones(_cn) / _cn
-            to_process.extend(zip(gro.children, sto.children))
+            to_process.extend(zip(gro.children, sto.children))#children of gro and sto are grouped together and put into root_region
         elif type(gro) is Separator: # sto is Split
             for child in gro.children:
                 sto.children.append(Sum())
