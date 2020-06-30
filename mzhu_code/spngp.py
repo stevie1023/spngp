@@ -19,7 +19,7 @@ class Sum:
 
     def forward(self, x_pred, label_y, **kwargs):
         if len(x_pred) == 0:
-            return np.zeros(1), np.zeros(1)
+            return np.zeros(1), np.zeros(1),np.zeros(1)
 
         # Sometimes Sums only have one child 
         # (when using 1GP for instance) therefore 
@@ -61,7 +61,7 @@ class Sum:
             mll_x = np.empty((len(x_pred), len(self.weights)))
             for i, child in enumerate(self.children):
                 mu_c, co_c, mll_x1 = child.forward(x_pred,label_y, **kwargs)
-                mu_x[:, i], co_x[:, i], mll_x[:, i] = mu_c.squeeze(-1), co_c.squeeze(-1), np.squeeze(mll_x1)
+                mu_x[:, i], co_x[:, i], mll_x[:, i] = mu_c.squeeze(-1), co_c.squeeze(-1), mll_x1.squeeze(-1)
 
             # # #
             # if self.children[0] is GPMixture:
@@ -271,10 +271,11 @@ class ExactGPModel(gpytorch.models.ExactGP):
             raise Exception("Unknown GP type")
 
         k3 = PolynomialKernel(2)
-        k2 = SpectralMixtureKernel(num_mixtures=4,  ard_num_dims=xd, active_dims=active_dims )
+        k4 = PeriodicKernel()
         # k1 = GridInterpolationKernel(gpytorch.kernels.RBFKernel(), grid_size=gpytorch.utils.grid.choose_grid_size(x), num_dims=4)
-        # self.covar_module = ScaleKernel(k2)
-        self.covar_module = k2
+        self.covar_module = ScaleKernel(k)
+        # self.covar_module =SpectralMixtureKernel(num_mixtures=4, ard_num_dims=xd, active_dims=active_dims)
+        # self.covar_module.initialize_from_data(x,y)
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -375,7 +376,7 @@ class GP:
             lls=[]
             ##modified
             for x_batch, y_batch in test_loader:
-                lls.append(self.model.likelihood.log_marginal(y_batch, self.model(x_batch)).item())
+                lls.append(self.model.likelihood.log_marginal(y_batch, self.model(x_batch)))
             # mll_ = ExactMarginalLogLikelihood(self.likelihood, self.model)
 
             # mll = mll_(observed_pred, y).item()
@@ -383,20 +384,21 @@ class GP:
         x.detach()
 
         del x
-
+        lls = torch.cat(lls, dim=-1)
         gc.collect()
         #modified
-        return pm.detach().cpu(), pv.detach().cpu(), np.array(lls)
+        return pm.detach().cpu(), pv.detach().cpu(), lls.detach().cpu()
     
     def init(self, **kwargs):
         lr    = dict.get(kwargs, 'lr',    0.20)
         steps = dict.get(kwargs, 'steps',  100)
         
         self.n      = len(self.x)
-        self.cuda   = dict.get(kwargs, 'cuda') and torch.cuda.is_available()
-        self.device = torch.device("cuda" if self.cuda else "cpu")
-        if self.cuda: 
-            torch.cuda.empty_cache()
+        # self.cuda   = dict.get(kwargs, 'cuda') and torch.cuda.is_available()
+        # self.device = torch.device("cuda" if self.cuda else "cpu")
+        self.device = torch.device('cpu')
+        # if self.cuda:
+        #     torch.cuda.empty_cache()
         
         self.x = torch.from_numpy(self.x).float().to(self.device)
 

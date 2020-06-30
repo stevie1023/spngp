@@ -55,6 +55,7 @@ class Mixture:
         self.n         = kwargs['n']
         self.parent    = dict.get(kwargs, 'parent', None)
         self.splits    = dict.get(kwargs, 'splits', [])
+        self.idx = dict.get(kwargs, 'idx', [])
         #assert np.all(self.spreads > 0)
 
     def __repr__(self, level = 0):
@@ -128,144 +129,6 @@ def query(X, mins, maxs, skipleft=False):
 
     return np.nonzero(mask)[0]
 
-def build(**kwargs):
-    X             = kwargs['X']
-    mins, maxs    = np.min(X, 0), np.max(X, 0)
-    max_depth     = dict.get(kwargs, 'max_depth',       8)
-    min_samples   = dict.get(kwargs, 'min_samples',     1)
-    max_samples   = dict.get(kwargs, 'max_samples', 10**4)
-    delta_divisor = dict.get(kwargs, 'delta_divisor',   2) 
-
-    if dict.get(kwargs, 'deltas') is not None:
-        deltas = kwargs['deltas']
-    else:
-        deltas = (maxs - mins) / delta_divisor
-    
-    root_node          = Mixture(mins = mins, maxs=maxs, deltas=deltas, n=len(X), parent=None)
-    to_process, cache  = [root_node], dict()
-    nsplits            = Counter()
-    
-    while len(to_process):
-        node = to_process.pop()
-        
-        if type(node) is not Mixture:
-            continue
-
-        if node.dimension == None:
-            node.dimension = node.depth #0 #np.random.randint(0, D)
-            
-        d             = node.dimension
-        spread, delta = node.spreads[d], node.deltas[d]
-        min_, max_    = node.mins[d], node.maxs[d]
-        n_splits, _   = divmod(spread, delta)
-        splits        = min_ + delta * np.arange(1, n_splits + 1)
-    
-        if len(splits) and np.isclose(splits[-1], max_):
-            splits = splits[0:-1]
-
-        if not len(splits):
-            raise Exception('1')
-            idx = query(X, node.mins, node.maxs)
-            gp  = _cached_gp(cache, mins=node.mins, maxs=node.maxs, idx=idx, parent=node)
-            node.children.append(gp)
-            continue
-
-        nsplits[len(splits)] += 1
-
-        for split in splits:
-            create_mixtures = (node.spreads >= (2 * node.deltas))
-
-            create_mixtures_left  = create_mixtures.copy()
-            create_mixtures_right = create_mixtures.copy()
-
-            create_mixtures_left[d]  = split - node.mins[d] >= (2*node.deltas[d])
-            create_mixtures_right[d] = node.maxs[d] - split >= (2*node.deltas[d])
-
-            n_max, n_min       = node.maxs.copy(), node.mins.copy()
-            n_max[d], n_min[d] = split, split
-            
-            idx_left   = query(X, node.mins, n_max,     skipleft=False)
-            idx_right  = query(X, n_min,     node.maxs, skipleft=True)
-            next_depth = node.depth+1
-            opts_left = {
-                'mins':      node.mins,
-                'maxs':      n_max, 
-                'deltas':    node.deltas, 
-                'depth':     next_depth, 
-                'dimension': np.argmax(create_mixtures_left),
-                'n':         len(idx_left),
-                'parent':    node
-            }
-            if np.any(create_mixtures_left) and len(idx_left) >= min_samples and next_depth < max_depth:
-                left = Mixture(**opts_left)
-            elif len(idx_left) > max_samples:
-                print(f"Forced a mixture. {len(idx_left)}")
-                left = Mixture(**opts_left)
-            else:
-                left = _cached_gp(cache, mins=node.mins, maxs=n_max, idx=idx_left, parent=node)
-            
-            opts_right = {
-                'mins':      n_min, 
-                'maxs':      node.maxs, 
-                'deltas':    node.deltas, 
-                'depth':     next_depth, 
-                'dimension': np.argmax(create_mixtures_right),
-                'n':         len(idx_right),
-                'parent':    node
-            }
-
-            if np.any(create_mixtures_right) and len(idx_right) >= min_samples and next_depth < max_depth:
-                right = Mixture(**opts_right)
-            elif len(idx_right) > max_samples:
-                print(f"Forced a mixture. {len(idx_right)}")
-                right = Mixture(**opts_right)
-            else:
-                right = _cached_gp(cache, mins=n_min, maxs=node.maxs, idx=idx_right, parent=node)
-            
-            # the trick
-            if len(idx_right) < min_samples:
-                #create_mixtures_right[opts_left['dimension']] = 0
-                # opts_left['maxs'] = node.maxs
-                # opts_left['dimension'] = opts_left['dimension']+1
-
-                # m = Mixture(**opts_left)
-                # node.children.append(m)
-                # to_process.append(m)
-
-                node.children.append(left)
-                to_process.append(left)
-                continue
-            
-            if len(idx_left) < min_samples:
-                #create_mixtures_left[opts_right['dimension']] = 0
-                # opts_right['mins'] = node.mins
-                # opts_right['dimension'] = opts_right['dimension']+1
-
-                # m = Mixture(**opts_right)
-                # node.children.append(m)
-                # to_process.append(m)
-                node.children.append(right)
-                to_process.append(right)
-                continue
-            
-            to_process.extend([left, right])
-            separator_opts = {
-                'dimension':             d, 
-                'split':             split, 
-                'children':  [left, right], 
-                'parent':             None,
-                'depth':        node.depth
-            }
-            node.children.append(Separator(**separator_opts))
-
-    gps = list(cache.values())
-    aaa = [len(gp.idx) for gp in gps]
-    c = (np.mean(aaa)**3)*len(aaa)
-    r = 1-(c/(len(X)**3))
-    print("Full:\t\t", len(X)**3, "\nOptimized:\t", int(c), f"\n#GP's:\t\t {len(gps)} ({np.min(aaa)}-{np.max(aaa)})", "\nReduction:\t", f"{round(100*r, 4)}%")
-    print(f"nsplits:\t {nsplits}")
-    print(f"Lengths:\t {aaa}\nSum:\t\t {sum(aaa)} (N={len(X)})")
-    return root_node, gps
 
 def get_splits(X, dd, **kwargs):
     meta      = dict.get(kwargs, 'meta', [""] * X.shape[1])
@@ -305,24 +168,22 @@ def build_bins(**kwargs):
     jump                = dict.get(kwargs, 'jump',                False)
     reduce_branching    = dict.get(kwargs, 'reduce_branching',    False)
     randomize_branching = dict.get(kwargs, 'randomize_branching', False)
-    
-    mins, maxs       = np.min(X, 0), np.max(X, 0)
 
-    splits, features_mask = get_splits(X, qd, meta=dict.get(kwargs, 'meta', None), log=log)
+    # splits, features_mask = get_splits(X, qd, meta=dict.get(kwargs, 'meta', None), log=log)
     
     root_mixture_opts = {
         'mins':      np.min(X, 0),  #min & max of every feature
         'maxs':      np.max(X, 0), 
         'n':         len(X), #here the valid length of the data(for every feature)
         'parent':    None,
-        'dimension': np.argmax(np.var(X, axis=0))      #the index of the features
+        'dimension': np.argmax(np.var(X, axis=0)),
+        'idx': X
+        #the index of the features
     }
 
     nsplits            = Counter()
     root_node          = Mixture(**root_mixture_opts)
     to_process, cache  = [root_node], dict()
-
-    d_selected = np.argsort(-np.var(X, axis=0))
 
     while len(to_process):
         node = to_process.pop()
@@ -330,11 +191,13 @@ def build_bins(**kwargs):
         if type(node) is not Mixture:
             continue
 
+        X = node.idx
+        d_selected = np.argsort(-np.var(X, axis=0))
         d = node.dimension
-
+        mins, maxs = np.min(X, 0), np.max(X, 0)
+        splits, features_mask = get_splits(X, qd, meta=dict.get(kwargs, 'meta', None), log=log)
         d2 = d_selected[1]
         d3 = d_selected[2]
-
 
         fit_lhs = node.mins < splits[:,  0]# the node is the Mixture now(include all data for every feature
         fit_rhs = node.maxs > splits[:, -1]
@@ -367,33 +230,83 @@ def build_bins(**kwargs):
                 continue
 
             node_splits3.append(node_split)
-
+        method1=[]
+        method2=[]
+        method3=[]
+        method4=[]
+        method5=[]
+        method6=[]
+        method7=[]
+        method8=[]
         a = iqr(X, axis=0)
         r = beta.rvs(2, 2, size = 4)
         v1 = maxs[d] - mins[d]
         v2 = maxs[d2] - mins[d2]
         v3 = maxs[d3] - mins[d3]
-        split1 = 0.2*(v1*r[d]+mins[d])+0.8*a[d]
-        split2 = 0.2*(v2*r[d2]+mins[d2])+0.8*a[d2]
-        split3 = 0.2*(v3*r[d3]+mins[d3])+0.8*a[d3]
-        node_splits_all = [np.mean(node_splits), np.mean(node_splits2), np.mean(node_splits3)]
-        node_splits_all2 = [split1,split2,split3]
-        # Jumping results in high branching of new Mixtures, to
-        # help this problem we reduce the creation of new branches
-        # for depth >= 1
+        split11 = mins[d]+a[d]
+        split12= mins[d2]+a[d2]
+        split13 = mins[d3]+a[d3]
+
+
+        q1 = np.percentile(X, 25, axis=0)
+        q3 = np.percentile(X, 75, axis=0)
+        sm = a[d] / (q1[d] + q3[d])
+        sm2 = a[d2] / (q1[d2] + q3[d2])
+        sm3 = a[d3] / (q1[d3] + q3[d3])
+        split21 = (q1[d]+q3[d])/2
+        split22 = (q1[d2]+q3[d2])/2
+        split23 = (q1[d3]+q3[d3])/2
+        split31 = 0.8 * (v1 * r[d] + mins[d]) + 0.2 * split11
+        split32 = 0.8 * (v2 * r[d2] + mins[d2]) + 0.2 * split12
+        split33 = 0.8 * (v3 * r[d3] + mins[d3]) + 0.2 * split13
+
+        split41 = 0.8 * (v1 * r[d] + mins[d]) + 0.2 * split21
+        split42 = 0.8 * (v2 * r[d2] + mins[d2]) + 0.2 * split22
+        split43 = 0.8 * (v3 * r[d3] + mins[d3]) + 0.2 * split23
+
+        split51 = 0.2 * (v1 * r[d] + mins[d]) + 0.8 * split11
+        split52 = 0.2 * (v2 * r[d2] + mins[d2]) + 0.8 * split12
+        split53 = 0.2 * (v3 * r[d3] + mins[d3]) + 0.8 * split13
+
+        split61 = 0.2 * (v1 * r[d] + mins[d]) + 0.8 * split21
+        split62 = 0.2 * (v2 * r[d2] + mins[d2]) + 0.8 * split22
+        split63 = 0.2 * (v3 * r[d3] + mins[d3]) + 0.8 * split23
+
+        split71 = 0.1 * (v1 * r[d] + mins[d]) + 0.9 * split11
+        split72 = 0.1 * (v2 * r[d2] + mins[d2]) + 0.9 * split12
+        split73 = 0.1 * (v3 * r[d3] + mins[d3]) + 0.9 * split13
+
+        split81 = 0.5 * (v1 * sm + mins[d]) + 0.5 * split11
+        split82 = 0.5 * (v2 * sm2 + mins[d2]) + 0.5 * split12
+        split83 = 0.5 * (v3 * sm3 + mins[d3]) + 0.5 * split13
+        # node_splits_all = [np.mean(node_splits), np.mean(node_splits2), np.mean(node_splits3)]
+        # print('median:',node_splits_all_print)
+        node_splits_all = [split61,split62,split63]
+
+        # print('median:', [np.median(node_splits), np.median(node_splits2), np.median(node_splits3)])
+        # print('method1:',[split11,split12,split13])
+        # print('method2:',[split21,split22,split23])
+        # print('method3:',[split31,split32,split33])
+        # print('method4:',[split41,split42,split43])
+        # print('method5:',[split51, split52, split53])
+        # print('method6:',[split61, split62, split63])
+        # print('method7:',[split71, split72, split73])
+        # print('method8:',[split81, split82, split83])
+
 
         if reduce_branching and node.depth >= 1:
-            # m = node_splits
-            node_splits_all = [split1, np.random.choice(node_splits_all2[1:])]
-            # node_splits_all = [np.median(a)]
-            # node_splits_all = [np.median(a), np.median(splits[d_two_all[-(1+j)]])]
+
+            # node_splits_all = [np.mean(node_splits)]
+            node_splits_all = [split61,split62]
+            # node_splits_all = [np.median(X,axis=0)[d],np.median(X,axis=0)[d2]]
 
         if len(node_splits_all) == 0: raise Exception('1')
 
         d = [d, d2, d3]
         i = 0
-        d_two_all = []
+        j = 0
         for split in node_splits_all:# again operate in splits in one dimension
+
             create_left  = create.copy()
             create_right = create.copy()
             create_left[d[i]]  = split != node_splits[0]
@@ -412,10 +325,12 @@ def build_bins(**kwargs):
     
             new_maxs, new_mins       = node.maxs.copy(), node.mins.copy()
             new_maxs[d[i]], new_mins[d[i]] = split, split
+
             
             idx_left   = query(X, node.mins, new_maxs,  skipleft=False)
             idx_right  = query(X, new_mins,  node.maxs, skipleft=True)#return the first index of data that satisfies certain requirements
-            
+            print('left_1:', len(idx_left))
+            print('right_1:', len(idx_right))
 
             next_depth = node.depth+1
 
@@ -425,7 +340,7 @@ def build_bins(**kwargs):
             ]
             
             results = []
-            d_two = []
+            k=0
             for _, create_mixture, idx, mins, maxs, in loop:
                 if min_samples == 0:
                     min_samples = min(len(idx_left), len(idx_right)) + 1
@@ -446,12 +361,13 @@ def build_bins(**kwargs):
                         'maxs':      maxs,
                         'depth':     next_depth,
                         'dimension': next_dimension,
-                        'n':         len(idx)    #the number of left/right new splits
+                        'n':         len(idx),
+                        'idx':       x_idx
+                    #the number of left/right new splits
                 }                                   #newly genenrated mixture nodes for the next dimension
+                k+=1
 
 
-                d_second = np.argsort(-np.var(x_idx, axis=0))[1]
-                d_two.append(d_second)
 
                 if all([can_create, big_enough, not_too_deep, not_too_big]):
                     results.append(Mixture(**mixture_opts))
@@ -467,31 +383,10 @@ def build_bins(**kwargs):
                     gp2 = _cached_gp(cache, mins=mins, maxs=maxs, idx=idx, parent=None)
                     results.append((gp))
 
-            d_two_all.extend(d_two)
+            j+=1
+
 
             if len(results) == 2:
-
-                #
-                # _1second_separator_opts = {
-                #     'depth': node.depth + 1,
-                #     'dimension': d_second[0],
-                #     'split': np.median(node.maxs[d_second[0]] - node.mins[d_second[0]]),
-                #     'children': None,
-                #     'parent': results[0].children
-                # }
-                #
-                # results[-1].children.append(Separator(**_1second_separator_opts))
-                #
-                # _2second_separator_opts = {
-                #     'depth': node.depth + 1,
-                #     'dimension': d_second[0],
-                #     'split': np.median(node.maxs[d_second[0]] - node.mins[d_second[0]]),
-                #     'children': None,
-                #     'parent': results[1].children
-                # }
-                #
-                # results[1].children.append(Separator(**_2second_separator_opts))
-
                 to_process.extend(results) #results are put into the root_reigon
                 separator_opts = {
                     'depth': node.depth,
@@ -509,7 +404,21 @@ def build_bins(**kwargs):
                 raise Exception('1')
             i += 1
 
-
+    # print('method1:',method1)
+    #
+    # print('method2:', method2)
+    #
+    # print('method2:', method3)
+    #
+    # print('method3:', method4)
+    #
+    # print('method4:', method5)
+    #
+    # print('method5:', method6)
+    #
+    # print('method6:', method7)
+    #
+    # print('method7:', method8)
     gps = list(cache.values())
     # aaa = [len(gp.idx) for gp in gps]
     aaa = [len((list(gp))[0].idx) for gp in gps]
